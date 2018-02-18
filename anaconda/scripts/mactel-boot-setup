@@ -1,0 +1,151 @@
+#!/usr/bin/bash
+#
+# macos-efi-setup 1.0
+#
+# Setup bootloader for macOS EFI Boot Camp (non-GRUB)
+#
+# This script only runs on Apple hardware when present
+# to copy Apple-specific files to the HFS+ ESP partition
+# and then hfs-bless the partition for bootable on 
+# Apple hardware.
+#
+# Based on https://aur.archlinux.org/cgit/aur.git/tree/mactel-boot-setup?h=mactel-boot
+#
+# Tested on Sierra (10.12) and High Sierra (10.13) boot camp.
+#
+# Changelog:
+#
+# 1.0.0
+#   * Initial release
+#
+
+# guards
+if [[ -z "${1}" ]] || [[ -z "${2}" ]] || [[ -z "${3}" ]] || [[ -z "${4}" ]] || [[ -z "${5}" ]]; then
+    echo
+    echo "Usage:"
+    echo "  macos-efi-setup <MACOS_DISK_LABEL> <HFS_PLUS_PARTITION_MOUNTPOINT> <EFI_FILE> <EFI_CONFIG> <ARTWORK_DIR>"
+    echo
+    echo "Example:"
+    echo "  macos-efi-setup \"Qubes OS\" /boot/efi EFI/qubes/xen.efi EFI/qubes/xen.cfg /usr/share/pixmaps/bootloader/apple/qubes"
+    echo
+    exit 0
+fi
+
+if [[ ! ${UID} -eq 0 ]]; then 
+    echo "ERROR: Please run as root user!"
+    exit 1
+fi
+
+_MACOS_DISK_LABEL="${1}"
+_HFS_PLUS_PART_MP="${2}"
+_EFI_FILE="${3}"
+_EFI_CONFIG="${4}"
+_EFI_DIR="$(dirname "${_EFI_FILE}")"
+_ARTWORK_DIR="${5}"
+
+if [[ ! "$(df -T "${_HFS_PLUS_PART_MP}" | tail -n +2 | awk '{print $2}')" == "hfsplus" ]]; then
+    echo
+    echo "${_HFS_PLUS_PART_MP} is not an HFS-PLUS Partition Mountpoint"
+    echo
+    exit 2
+fi
+
+if [[ ! -d "${_HFS_PLUS_PART_MP}" ]]; then
+    echo "${_HFS_PLUS_PART_MP} HFS_PLUS_PART_MP not found."
+    echo 3
+fi
+
+if [[ ! -f "${_HFS_PLUS_PART_MP}/${_EFI_FILE}" ]]; then
+    echo "${_HFS_PLUS_PART_MP}/${_EFI_FILE} EFI_FILE not found."
+    echo 4
+fi
+
+if [[ ! -f "${_HFS_PLUS_PART_MP}/${_EFI_CONFIG}" ]]; then
+    echo "${_HFS_PLUS_PART_MP}/${_EFI_CONFIG} EFI_CONFIG not found."
+    echo 5
+fi
+
+# identify this as a bootable volume to boot camp
+[[ ! -f "${_HFS_PLUS_PART_MP}/mach_kernel" ]] \
+    && echo "This file is required for booting" > "${_HFS_PLUS_PART_MP}/mach_kernel"
+
+# setup the macOS system path for EFI booting
+mkdir -p "${_HFS_PLUS_PART_MP}/System/Library/CoreServices"
+
+# create the SystemVersion.plist that describes the system to boot camp
+cat <<EOF > "${_HFS_PLUS_PART_MP}/System/Library/CoreServices/SystemVersion.plist"
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>ProductBuildVersion</key>
+    <string></string>
+    <key>ProductName</key>
+    <string>Linux</string>
+    <key>ProductVersion</key>
+    <string>${_MACOS_DISK_LABEL}</string>
+</dict>
+</plist>
+EOF
+cp -f "${_HFS_PLUS_PART_MP}/System/Library/CoreServices/SystemVersion.plist" \
+    "${_HFS_PLUS_PART_MP}/${_EFI_DIR}/SystemVersion.plist"
+
+# .disk_label is an image that should match the _MACOS_DISK_LABEL
+if [[ -f "${_ARTWORK_DIR}/disk_label" ]]; then
+    cp -f "${_ARTWORK_DIR}/disk_label" "${_HFS_PLUS_PART_MP}/${_EFI_DIR}/.disk_label"
+else
+    touch "${_HFS_PLUS_PART_MP}/${_EFI_DIR}/.disk_label"
+fi
+if [[ -f "${_ARTWORK_DIR}/disk_label_2x" ]]; then
+    cp -f "${_ARTWORK_DIR}/disk_label_2x" "${_HFS_PLUS_PART_MP}/${_EFI_DIR}/.disk_label_2x"
+else
+    touch "${_HFS_PLUS_PART_MP}/${_EFI_DIR}/.disk_label_2x" 
+fi
+cat <<EOF > "${_HFS_PLUS_PART_MP}/${_EFI_DIR}/.disk_label.contentDetails"
+${_MACOS_DISK_LABEL}
+EOF
+cp "${_HFS_PLUS_PART_MP}/${_EFI_DIR}/.disk_label*" "${_HFS_PLUS_PART_MP}/System/Library/CoreServices/"
+
+# .VolumeIcons.icns is a collection of multi-sized images for bootcamp and macOS
+if [[ -f "${_ARTWORK_DIR}.icns" ]]; then
+    cp "${_ARTWORK_DIR}.icns" "${_HFS_PLUS_PART_MP}/.VolumeIcon.icns"
+else
+    touch "${_HFS_PLUS_PART_MP}/.VolumeIcon.icns"
+fi
+
+# link the xen efi and cfg files to expected location for boot camp.
+# this symlink will point to our blessed _EFI_FILE (allowing upgrades).
+ln -sf "../../../${_EFI_FILE}" \
+    "${_HFS_PLUS_PART_MP}/System/Library/CoreServices/boot.efi"
+ln -sf "../../../${_EFI_CONFIG}" \
+    "${_HFS_PLUS_PART_MP}/System/Library/CoreServices/$(basename "${_HFS_PLUS_PART_MP}/${_EFI_CONFIG}")"
+
+# enforce permissions
+chmod 0644 \
+    "${_HFS_PLUS_PART_MP}/.VolumeIcon.icns" \
+    "${_HFS_PLUS_PART_MP}/mach_kernel" \
+    "${_HFS_PLUS_PART_MP}/${_EFI_DIR}/.disk_label*" \
+    "${_HFS_PLUS_PART_MP}/${_EFI_DIR}/SystemVersion.plist" \
+    "${_HFS_PLUS_PART_MP}/System/Library/CoreServices/.disk_label*"
+    "${_HFS_PLUS_PART_MP}/System/Library/CoreServices/SystemVersion.plist"
+
+# bless it all
+hfs-bless "${_HFS_PLUS_PART_MP}/${_EFI_FILE}"
+echo
+
+# disable macOS metadata
+cd "${_HFS_PLUS_PART_MP}"
+mkdir .fseventsd
+touch .fseventsd/no_log .metadata_never_index .Trashes
+cd -
+
+# set partition to hidden from macOS (e.g. for dual-boot systems)
+# chflags hidden "${_HFS_PLUS_PART_MP}/"
+
+# cleanup
+unset _MACOS_DISK_LABEL
+unset _HFS_PLUS_PART_MP
+unset _EFI_FILE
+unset _EFI_CONFIG
+unset _EFI_DIR
+unset _ARTWORK_DIR

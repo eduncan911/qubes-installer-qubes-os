@@ -1908,14 +1908,40 @@ class XenEFI(EFIGRUB):
 
     write_config = BootLoader.write_config
 
-class MacEFIGRUB(EFIGRUB):
+class MacEFIGRUB(XenEFI):
+    """Special EFI handling for macOS HFS+ ESP partition.
+
+    Typical GRUB2 installations would execute the script
+    located at /usr/libexec/mactel-boot-setup which would
+    modify the HFS+ ESP files and bless the specified efi
+    file for Fedora installations.
+
+    However, we are not using GRUB at this time which would
+    cause that script to exit earlier.
+
+    Therefore a custom script for Qubes is used.
+    """
+
     def mactel_config(self):
-        if os.path.exists(iutil.getSysroot() + "/usr/libexec/mactel-boot-setup"):
-            rc = iutil.execInSysroot("/usr/libexec/mactel-boot-setup", [])
+        label_name = "\"Qubes OS\"" # optional labels: "Install Qubes OS" and "Qubes OS (rescue)"
+        script = "/usr/share/anaconda/mactel-boot-setup"
+        artwork = "{}/{}".format("/usr/share/pixmaps/bootloader/apple", self.efi_dir)
+        mountpoint = "{}/{}".format(iutil.getSysroot(), "boot/efi")   # fixme: abstract from writeBootLoader()
+        efi_file = "{}/{}/{}".format("EFI", self.efi_dir, "xen.efi")
+        efi_conf = "{}/{}/{}".format("EFI", self.efi_dir, "xen.cfg")
+
+        script_options = [label_name, mountpoint, efi_file, efi_conf, artwork]
+        log.debug("mactel script options: %s", script_options)
+
+        if os.path.exists(script):
+            rc = iutil.execInSysroot(script, script_options)
             if rc:
-                log.error("failed to configure Mac boot loader")
+                log.error("mactel failed to exec %s %s : %s", script, script_options, rc)
+        else:
+            log.error("mactel script not found : %s", script)
 
     def install(self, args=None):
+        log.info("Installing mactel MacEFI bootloader")
         super(MacEFIGRUB, self).install()
         self.mactel_config()
 
